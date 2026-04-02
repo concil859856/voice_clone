@@ -1,0 +1,8 @@
+# Voice-clone FastAPI app (PYTHONPATH must include repo root so `import clone` works).
+#
+# vLLM ASR server: install audio deps in the venv that runs `vllm serve` — see requirements-vllm-asr.txt
+fastapi>=0.110
+uvicorn[standard]>=0.24
+httpx>=0.27
+python-multipart>=0.0.9
+pydantic>=2.0

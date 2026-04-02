@@ -1,0 +1,9 @@
+# Install into the SAME virtualenv you use for `vllm serve` (fixes /v1/audio/transcriptions).
+# pip install -r requirements-vllm-asr.txt
+#
+# Option A (pulls everything vLLM declares for audio):
+# pip install "vllm[audio]"
+#
+# Option B (minimal; matches vLLM speech_to_text preprocessing):
+librosa>=0.10.0
+soundfile>=0.12.0
