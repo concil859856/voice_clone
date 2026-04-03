@@ -21,7 +21,10 @@ class Settings:
 @lru_cache
 def get_settings() -> Settings:
     return Settings(
-        vllm_asr_base_url=os.getenv("VLLM_ASR_BASE_URL", "http://127.0.0.1:8000/v1").rstrip("/"),
+        # OpenAI-compatible base URL for ASR (override with env VLLM_ASR_BASE_URL).
+        vllm_asr_base_url=os.getenv(
+            "VLLM_ASR_BASE_URL", "http://144.202.61.73:8099/v1"
+        ).rstrip("/"),
         vllm_asr_model=os.getenv("VLLM_ASR_MODEL", "Qwen/Qwen3-ASR-1.7B"),
         vllm_api_key=os.getenv("VLLM_API_KEY", "EMPTY"),
         tts_model_id=os.getenv("TTS_MODEL_ID", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"),
