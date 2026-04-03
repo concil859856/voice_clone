@@ -9,8 +9,6 @@ from transformers.configuration_utils import PretrainedConfig
 
 from qwen_tts import Qwen3TTSModel
 from qwen_tts.core.models import Qwen3TTSConfig
-
-
 def _set_config_dtype_tree(config: PretrainedConfig, dtype: torch.dtype) -> None:
     """
     Hugging Face sets config.dtype only on the root and immediate sub_configs.
