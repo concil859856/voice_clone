@@ -20,7 +20,8 @@ python main.py
 ```
 
 - API docs: `http://127.0.0.1:8088/docs` (default host/port from `CONFIG`).
-- Voice clone URL: **`POST http://<host>:<port>/voice-clone`**
+- Endpoint 1: **`POST http://<host>:<port>/voice-clone`** (uploaded reference audio + texts)
+- Endpoint 2: **`POST http://<host>:<port>/clone_const`** (fixed reference voice from `const_reborn.wav`)
 
 ---
 
@@ -28,7 +29,8 @@ python main.py
 
 | Path | Role |
 |------|------|
-| **`main.py`** | **Primary HTTP service.** All important settings live in the `CONFIG` dict at the top. Exposes `POST /voice-clone` (WAV out), `GET /health`, and auto-generated `/docs`. |
+| **`main.py`** | **Primary HTTP service.** All important settings live in the `CONFIG` dict at the top. Exposes `POST /voice-clone` (WAV out), `POST /clone_const` (fixed reference voice; token-protected; WAV/OGG out), `GET /health`, and auto-generated `/docs`. |
+| **`example_clone_const_client.py`** | Remote-client example for calling `/clone_const` with token auth and saving output locally. |
 | **`test_voice_clone_local.py`** | Example client: POSTs a sample MP3 + form fields to the local server and saves `test_voice_clone_out.wav`. Run `main.py` first. |
 | **`voice_clone.py`** | **CLI / script** version: loads TTS from disk paths, writes a WAV file. Useful for one-off experiments without HTTP. |
 | **`test.py`** | Minimal inline test calling `Qwen3TTSModel` directly and writing `output_voice_clone.wav`. |
@@ -69,3 +71,30 @@ The **root `main.py`** does **not** use vLLM; the **`clone/`** app **does** for 
 ## `.gitignore`
 
 The repo ignores `venv/`, `__pycache__/`, `*.wav`, and `.env` so virtualenvs and generated audio stay local.
+
+---
+
+## `/clone_const` auth and usage
+
+`/clone_const` uses simple token auth via request header:
+
+- Header name: `X-Token`
+- Required value: `vexor_bot_token`
+
+Server-side token is configured in `main.py`:
+
+```python
+"const_auth_token": "vexor_bot_token"
+```
+
+Example curl:
+
+```bash
+curl -X POST "http://127.0.0.1:8088/clone_const" \
+  -H "X-Token: vexor_bot_token" \
+  -F "text=it's pretty impressive they are doing it well" \
+  -F "output_format=ogg" \
+  --output const_out.ogg
+```
+
+Or use `example_clone_const_client.py` from another server/application and save the returned bytes to a local file.
