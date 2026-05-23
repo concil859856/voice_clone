@@ -16,11 +16,17 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 # ---------------------------------------------------------------------------
-# Configuration (edit here)
+# Configuration
+#
+# Values here are defaults. Every key can be overridden at runtime by
+# setting the matching ``VOICE_CLONE_*`` env var (see _env_overrides()
+# below). For deployments via the Vocence /studio/ops fleet manager, the
+# defaults below match the dashboard's expectations: port 8113, bearer
+# auth via VOICE_CLONE_API_KEY, cap=1 concurrent request.
 # ---------------------------------------------------------------------------
 CONFIG: dict[str, Any] = {
     "host": "0.0.0.0",
-    "port": 53211,
+    "port": 8113,
     "tts_model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
     "tts_language": "English",
     "tts_max_new_tokens": 2048,
@@ -42,15 +48,63 @@ CONFIG: dict[str, Any] = {
     # Hugging Face token for gated models; None → use HF_TOKEN / HUGGINGFACE_HUB_TOKEN env
     "hf_token": None,
     "preload_tts": False,
+    # Vocence /studio/ops integration ---------------------------------------
+    # Bearer token required on /healthz and /metrics. None / empty = open.
+    # On the rented box, set VOICE_CLONE_API_KEY to match what the dashboard
+    # registered the pod with.
+    "api_key": None,
+    # Max concurrent requests against the model. The single-thread engine
+    # means cap > 1 just queues; cap=1 fails fast with 503 server_busy.
+    "cap": 1,
 }
 # ---------------------------------------------------------------------------
+
+
+def _env_overrides(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Layer env vars on top of CONFIG. All env vars are prefixed
+    ``VOICE_CLONE_`` so they don't collide with other services on the
+    same host."""
+    def _coerce(default, raw: str):
+        if isinstance(default, bool):
+            return raw.strip().lower() in {"1", "true", "yes", "on"}
+        if isinstance(default, int) and not isinstance(default, bool):
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+        if isinstance(default, float):
+            try:
+                return float(raw)
+            except ValueError:
+                return default
+        return raw
+
+    out = dict(cfg)
+    # Special-cased env names — match the dashboard's deploy modal contract.
+    pairs = [
+        ("HOST", "host"),
+        ("PORT", "port"),
+        ("VOICE_CLONE_API_KEY", "api_key"),
+        ("VOICE_CLONE_CAP", "cap"),
+        ("VOICE_CLONE_REQUEST_TIMEOUT", "request_timeout_seconds"),
+        ("VOICE_CLONE_HF_TOKEN", "hf_token"),
+        ("VOICE_CLONE_PRELOAD", "preload_tts"),
+    ]
+    for env_key, cfg_key in pairs:
+        raw = os.environ.get(env_key)
+        if raw is not None and raw.strip() != "":
+            out[cfg_key] = _coerce(cfg.get(cfg_key), raw)
+    return out
+
+
+CONFIG = _env_overrides(CONFIG)
 
 import librosa
 import numpy as np
 import soundfile as sf
 import torch
 import uvicorn
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from starlette.responses import Response
 from transformers import AutoConfig
 from transformers.configuration_utils import PretrainedConfig
@@ -237,9 +291,192 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Voice clone", version="1.0.0", lifespan=_lifespan)
 
 
+# ---------------------------------------------------------------------------
+# Vocence /studio/ops integration: bearer auth, inflight tracking, /healthz,
+# /metrics. Added on top of the existing endpoints with zero shape changes —
+# legacy callers keep working; the Vocence dashboard's poller reads /healthz
+# and /metrics for fleet visibility.
+# ---------------------------------------------------------------------------
+import collections as _collections
+import time as _time
+from fastapi.responses import JSONResponse as _JSONResponse
+
+
+class _Metrics:
+    def __init__(self, recent_window: int = 1000) -> None:
+        self._lock = threading.Lock()
+        self.start_ts = _time.time()
+        self.requests_total = 0
+        self.requests_ok = 0
+        self.requests_err: dict[str, int] = {}
+        self.duration_ms_sum = 0.0
+        self.duration_ms_count = 0
+        self.recent_durations_ms: "_collections.deque[float]" = _collections.deque(maxlen=recent_window)
+        self.bytes_sent_total = 0
+        self.audio_ms_total = 0  # not tracked here (would need to decode each WAV) — kept 0 for shape parity
+
+    def record_success(self, duration_ms: float, bytes_sent: int = 0) -> None:
+        with self._lock:
+            self.requests_total += 1
+            self.requests_ok += 1
+            self.duration_ms_sum += duration_ms
+            self.duration_ms_count += 1
+            self.recent_durations_ms.append(duration_ms)
+            self.bytes_sent_total += bytes_sent
+
+    def record_error(self, code: str, duration_ms: float = 0.0) -> None:
+        with self._lock:
+            self.requests_total += 1
+            self.requests_err[code] = self.requests_err.get(code, 0) + 1
+            if duration_ms > 0:
+                self.duration_ms_sum += duration_ms
+                self.duration_ms_count += 1
+                self.recent_durations_ms.append(duration_ms)
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            durations = sorted(self.recent_durations_ms)
+            n = len(durations)
+            def pct(p: float) -> float:
+                if n == 0:
+                    return 0.0
+                return durations[min(n - 1, int(p * n))]
+            return {
+                "uptime_seconds": int(_time.time() - self.start_ts),
+                "requests_total": self.requests_total,
+                "requests_ok": self.requests_ok,
+                "requests_err": dict(self.requests_err),
+                "duration_ms_sum": self.duration_ms_sum,
+                "duration_ms_count": self.duration_ms_count,
+                "duration_ms_avg": (self.duration_ms_sum / self.duration_ms_count) if self.duration_ms_count else 0.0,
+                "duration_ms_p50": pct(0.50),
+                "duration_ms_p95": pct(0.95),
+                "duration_ms_p99": pct(0.99),
+                "bytes_sent_total": self.bytes_sent_total,
+                "audio_ms_total": self.audio_ms_total,
+            }
+
+
+_metrics = _Metrics()
+
+
+class _InflightTracker:
+    def __init__(self, cap: int) -> None:
+        self._cap = max(1, int(cap))
+        self._count = 0
+        self._lock = asyncio.Lock()
+
+    @property
+    def cap(self) -> int: return self._cap
+
+    @property
+    def inflight(self) -> int: return self._count
+
+    async def try_acquire(self) -> bool:
+        async with self._lock:
+            if self._count >= self._cap:
+                return False
+            self._count += 1
+            return True
+
+    async def release(self) -> None:
+        async with self._lock:
+            self._count = max(0, self._count - 1)
+
+
+_inflight = _InflightTracker(cap=int(CONFIG.get("cap", 1)))
+
+
+# Endpoints that should NOT count toward inflight / metrics (they're the
+# observability endpoints themselves + FastAPI's docs).
+_OPS_PATHS = {"/healthz", "/metrics", "/health", "/docs", "/redoc", "/openapi.json"}
+
+
+def _check_bearer(request) -> _JSONResponse | None:
+    """Return a 401 JSONResponse if the configured API key is set and the
+    request lacks the matching Authorization header. Returns None on
+    success or when no key is configured (dev / unauthenticated mode)."""
+    key = (CONFIG.get("api_key") or "").strip()
+    if not key:
+        return None
+    header = request.headers.get("authorization", "")
+    if header == f"Bearer {key}":
+        return None
+    return _JSONResponse(
+        {"type": "error", "code": "auth", "message": "missing or invalid bearer token"},
+        status_code=401,
+    )
+
+
+@app.middleware("http")
+async def _ops_middleware(request, call_next):
+    """Apply inflight tracking + metrics recording on every non-ops endpoint.
+    Skips /healthz and /metrics so they're always reachable for monitoring,
+    even when the model is saturated."""
+    path = request.url.path
+    if path in _OPS_PATHS:
+        return await call_next(request)
+
+    if not await _inflight.try_acquire():
+        _metrics.record_error("server_busy", 0)
+        return _JSONResponse(
+            {"type": "error", "code": "server_busy", "message": f"inflight cap ({_inflight.cap}) exhausted"},
+            status_code=503,
+        )
+
+    t0 = _time.perf_counter()
+    try:
+        response = await call_next(request)
+        elapsed = (_time.perf_counter() - t0) * 1000.0
+        if response.status_code < 400:
+            _metrics.record_success(elapsed)
+        else:
+            _metrics.record_error(f"http_{response.status_code}", elapsed)
+        return response
+    except Exception as e:
+        _metrics.record_error(f"exception_{type(e).__name__}", (_time.perf_counter() - t0) * 1000.0)
+        raise
+    finally:
+        await _inflight.release()
+
+
 @app.get("/health")
 async def health():
+    # Legacy endpoint kept for back-compat (existing callers in the wild).
     return {"status": "ok"}
+
+
+@app.get("/healthz")
+async def healthz(request: Request):
+    """Vocence ops dashboard health probe. Bearer-auth'd when api_key
+    is configured. Returns the standardized shape the ops poller expects."""
+    err = _check_bearer(request)
+    if err is not None:
+        return err
+    return _JSONResponse({
+        "status": "ok",
+        "service": "voice_clone",
+        "model_id": CONFIG.get("tts_model_id", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"),
+        "sample_rate": 24000,
+        "inflight": _inflight.inflight,
+        "cap": _inflight.cap,
+        "dev_stub": False,
+    })
+
+
+@app.get("/metrics")
+async def metrics(request: Request):
+    """Vocence ops dashboard scrape endpoint. Same JSON shape as the
+    fast-tts-streaming + voice-design-non-streaming servers so the
+    backend's poller treats every service uniformly."""
+    err = _check_bearer(request)
+    if err is not None:
+        return err
+    snap = _metrics.snapshot()
+    snap["service"] = "voice_clone"
+    snap["inflight"] = _inflight.inflight
+    snap["cap"] = _inflight.cap
+    return _JSONResponse(snap)
 
 
 @app.post("/voice-clone", response_class=Response)
