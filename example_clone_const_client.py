@@ -16,8 +16,9 @@ from pathlib import Path
 
 import httpx
 
+OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 BASE_URL = "http://149.36.0.184:8088"
-TOKEN = "vexor_bot_token"
+TOKEN = "logos_bot_token"
 TEXT = "it's pretty impressive they are doing it well"
 OUTPUT_FORMAT = "ogg"  # "wav" or "ogg"
 VOICE = "const"  # const | assistant | mark | nova | joker
@@ -38,7 +39,8 @@ def main() -> None:
         valid = ", ".join(sorted(VOICE_TO_ENDPOINT))
         raise SystemExit(f"Invalid VOICE='{VOICE}'. Use one of: {valid}")
 
-    output_path = Path(f"/workspace/{endpoint}_example.{OUTPUT_FORMAT}")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = OUTPUT_DIR / f"{endpoint}_example.{OUTPUT_FORMAT}"
     url = f"{BASE_URL.rstrip('/')}/{endpoint}"
     headers = {"X-Token": TOKEN}
     data = {"text": TEXT, "output_format": OUTPUT_FORMAT}

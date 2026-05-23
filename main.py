@@ -20,14 +20,14 @@ from typing import Any, Optional, Tuple
 # ---------------------------------------------------------------------------
 CONFIG: dict[str, Any] = {
     "host": "0.0.0.0",
-    "port": 8088,
+    "port": 53211,
     "tts_model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
     "tts_language": "English",
     "tts_max_new_tokens": 2048,
     # Hard timeout per HTTP request for generation work.
-    "request_timeout_seconds": 50,
+    "request_timeout_seconds": 300,
     # Fixed-voice profiles used by /clone_const and other clone_* endpoints:
-    "fixed_voice_dir": "/workspace/bt_voices",
+    "fixed_voice_dir": str(Path(__file__).resolve().parent / "bt_voices"),
     "fixed_voice_scripts": {
         "const": "private so that you can rent a machine on the cloud and you can do all your work on it, but nobody can ever peer inside it. And that is, that is like cryptographic",
         "assistant": "Vocence is a Bittensor subnet that focusing on voice intelligence on decentalized netowrk. it is really cool to be honest",
@@ -38,7 +38,7 @@ CONFIG: dict[str, Any] = {
     # Optional per-voice path override (empty => auto-detect from fixed_voice_dir).
     "fixed_voice_paths": {},
     # Simple token auth used by fixed clone endpoints:
-    "const_auth_token": "vexor_bot_token",
+    "const_auth_token": "logos_bot_token",
     # Hugging Face token for gated models; None → use HF_TOKEN / HUGGINGFACE_HUB_TOKEN env
     "hf_token": None,
     "preload_tts": False,
@@ -270,6 +270,8 @@ async def voice_clone(
             tgt_key,
         )
         audio_bytes, media_type, ext = _encode_audio_bytes(wav_np, sample_rate, "wav")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -330,6 +332,8 @@ async def _clone_fixed_voice(
             target_text,
         )
         audio_bytes, media_type, ext = _encode_audio_bytes(wav_np, sample_rate, output_format)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 

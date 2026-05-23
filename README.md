@@ -79,19 +79,19 @@ The repo ignores `venv/`, `__pycache__/`, `*.wav`, and `.env` so virtualenvs and
 `/clone_const` uses simple token auth via request header:
 
 - Header name: `X-Token`
-- Required value: `vexor_bot_token`
+- Required value: `logos_bot_token`
 
 Server-side token is configured in `main.py`:
 
 ```python
-"const_auth_token": "vexor_bot_token"
+"const_auth_token": "logos_bot_token"
 ```
 
 Example curl:
 
 ```bash
-curl -X POST "http://127.0.0.1:8088/clone_const" \
-  -H "X-Token: vexor_bot_token" \
+curl -X POST "http://127.0.0.1:53211/clone_const" \
+  -H "X-Token: logos_bot_token" \
   -F "text=it's pretty impressive they are doing it well" \
   -F "output_format=ogg" \
   --output const_out.ogg
