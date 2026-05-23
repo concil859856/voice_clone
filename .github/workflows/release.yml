@@ -1,10 +1,12 @@
 name: Build & Push Image
-# Triggers ONLY on commits landing on main (i.e. when a PR merges).
-# Feature-branch pushes do nothing. Same pattern as the TTS server repos.
+# Triggers ONLY on commits landing on master (i.e. when a PR merges).
+# Feature-branch pushes do nothing. Same pattern as the TTS server repos,
+# but this repo's default branch is `master` (not `main`) — the previous
+# value of `[main]` meant five merged PRs never triggered a single build.
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths-ignore:
       - "**.md"
       - "LICENSE"
