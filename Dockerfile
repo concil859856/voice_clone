@@ -18,7 +18,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HF_HOME=/cache/hf \
-    TRANSFORMERS_CACHE=/cache/hf/transformers \
     HOST=0.0.0.0 \
     PORT=8113
 
