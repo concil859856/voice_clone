@@ -18,7 +18,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HF_HOME=/cache/hf \
-    TRANSFORMERS_CACHE=/cache/hf/transformers \
     HOST=0.0.0.0 \
     PORT=8113
 
@@ -42,6 +41,15 @@ COPY bt_voices/ ./bt_voices/
 COPY voice_clone.py ./
 # (clone/ package is optional and not used by main.py; left out to keep
 # the image lean.)
+
+# Build-time import smoke test — verifies the full import chain the
+# entrypoint exercises is internally consistent. Cheap (no GPU, ~5 s)
+# but catches torch/torchvision ABI mismatches, missing modules, and
+# similar import-time failures BEFORE the image reaches Docker Hub.
+# Runs on the CPU-only GHA runner. A broken image that imports cleanly
+# at build time is a contradiction.
+RUN python3 -c "import torch; print('torch', torch.__version__)" \
+    && python3 -c "import main; print('main import OK')"
 
 # Persistent HuggingFace cache. Mount a host volume here so the ~3.4 GB
 # Qwen3-TTS weights aren't re-downloaded on every container recreation.
